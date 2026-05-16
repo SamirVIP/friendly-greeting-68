@@ -74,6 +74,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       { title: "FF Assets Finder" },
       { name: "description", content: "FF Assets Finder" },
+      { property: "og:title", content: "FF Assets Finder" },
+      { name: "twitter:title", content: "FF Assets Finder" },
+      { property: "og:description", content: "FF Assets Finder" },
+      { name: "twitter:description", content: "FF Assets Finder" },
+      { property: "og:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/nkNyHHilE1c2nJLZYrvzq9RzIxH3/social-images/social-1778918345074-1778822830157-019e2a1a-1216-7e56-a021-189700170924.webp" },
+      { name: "twitter:image", content: "https://storage.googleapis.com/gpt-engineer-file-uploads/nkNyHHilE1c2nJLZYrvzq9RzIxH3/social-images/social-1778918345074-1778822830157-019e2a1a-1216-7e56-a021-189700170924.webp" },
+      { name: "twitter:card", content: "summary_large_image" },
+      { property: "og:type", content: "website" },
     ],
     links: [
       {
