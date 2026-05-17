@@ -91,6 +91,8 @@ export function PfnAssetsFinder() {
   const [checkingProgress, setCheckingProgress] = useState(0);
   const [checkingStartedAt, setCheckingStartedAt] = useState<number | null>(null);
   const [generatedCount, setGeneratedCount] = useState(0);
+  const [skippedByFormatCount, setSkippedByFormatCount] = useState(0);
+  const [uncheckedCount, setUncheckedCount] = useState(0);
   const [checkDurationMs, setCheckDurationMs] = useState(0);
   const [totalDurationMs, setTotalDurationMs] = useState(0);
 
@@ -104,32 +106,6 @@ export function PfnAssetsFinder() {
 
   function formatSeconds(ms: number) {
     return `${(ms / 1000).toFixed(2)}s`;
-  }
-
-  function formatEta(ms: number | null) {
-    if (ms === null || !Number.isFinite(ms) || ms < 0) return "--";
-    return formatSeconds(ms);
-  }
-
-  async function waitForNextPoll(ms: number, signal: AbortSignal) {
-    await new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(() => {
-        cleanup();
-        resolve();
-      }, ms);
-
-      const onAbort = () => {
-        cleanup();
-        reject(new DOMException("Aborted", "AbortError"));
-      };
-
-      const cleanup = () => {
-        window.clearTimeout(timeout);
-        signal.removeEventListener("abort", onAbort);
-      };
-
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
   }
 
   useEffect(() => {
@@ -146,6 +122,8 @@ export function PfnAssetsFinder() {
     setCheckingProgress(0);
     setCheckingStartedAt(null);
     setGeneratedCount(0);
+    setSkippedByFormatCount(0);
+    setUncheckedCount(0);
     setCheckDurationMs(0);
     setTotalDurationMs(0);
   }
@@ -235,15 +213,25 @@ export function PfnAssetsFinder() {
 
     const controller = new AbortController();
     generateAbortRef.current = controller;
+    let progressTimer: number | null = null;
 
     try {
+      progressTimer = window.setInterval(() => {
+        const elapsedMs = Date.now() - startedAt;
+        setCheckingMessage(
+          linkCheckEnabled
+            ? `Checking links... Elapsed ${formatSeconds(elapsedMs)} (Please wait)`
+            : `Generating links... Elapsed ${formatSeconds(elapsedMs)}`,
+        );
+      }, 1200);
+
       const startRes = await fetch("/api/public/app/generate-links", {
         method: "POST",
         credentials: "include",
         signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mode: "async",
+          mode: "sync",
           linkFormat,
           checkLinks: linkCheckEnabled,
           input: {
@@ -258,10 +246,17 @@ export function PfnAssetsFinder() {
       const startData = (await startRes.json()) as {
         ok: boolean;
         error?: string;
-        jobId?: string;
+        links?: LinkItem[];
+        generatedCount?: number;
+        skippedByFormatCount?: number;
+        uncheckedCount?: number;
+        checkDurationMs?: number;
+        totalDurationMs?: number;
       };
 
-      if (!startRes.ok || !startData.ok || !startData.jobId) {
+      if (progressTimer !== null) window.clearInterval(progressTimer);
+
+      if (!startRes.ok || !startData.ok) {
         setCheckingProgress(0);
         setCheckingMessage("");
         setCheckingStartedAt(null);
@@ -269,78 +264,23 @@ export function PfnAssetsFinder() {
         return;
       }
 
-      let completed = false;
-      while (!completed) {
-        await waitForNextPoll(2200, controller.signal);
-
-        const pollRes = await fetch(`/api/public/app/generate-links?jobId=${encodeURIComponent(startData.jobId)}`, {
-          method: "GET",
-          credentials: "include",
-          signal: controller.signal,
-        });
-
-        const data = (await pollRes.json()) as {
-          ok: boolean;
-          error?: string;
-          status?: "running" | "done" | "error";
-          processed?: number;
-          total?: number;
-          elapsedMs?: number;
-          estimatedRemainingMs?: number | null;
-          links?: LinkItem[];
-          generatedCount?: number;
-          checkDurationMs?: number;
-          totalDurationMs?: number;
-        };
-
-        if (!pollRes.ok || !data.ok) {
-          setCheckingProgress(0);
-          setCheckingMessage("");
-          setCheckingStartedAt(null);
-          setErrorText(data.error ?? "Generation failed");
-          return;
-        }
-
-        const processed = data.processed ?? 0;
-        const total = data.total ?? 0;
-        const elapsedMs = data.elapsedMs ?? Date.now() - startedAt;
-        const ratio = total > 0 ? processed / total : 0;
-        const progress = Math.max(8, Math.min(98, Math.round(ratio * 100)));
-
-        setCheckingProgress(data.status === "done" ? 100 : progress);
-        setCheckingMessage(
-          linkCheckEnabled
-            ? `Checked ${processed}/${total || "..."} · Elapsed ${formatSeconds(elapsedMs)} · ETA ${formatEta(data.estimatedRemainingMs ?? null)}`
-            : `Generating links... elapsed ${formatSeconds(elapsedMs)}`,
-        );
-
-        if (data.status === "running") continue;
-
-        if (data.status === "error") {
-          setCheckingProgress(0);
-          setCheckingMessage("");
-          setCheckingStartedAt(null);
-          setErrorText(data.error ?? "Generation failed");
-          return;
-        }
-
-        completed = true;
-        setResults(data.links ?? []);
-        setGeneratedCount(data.generatedCount ?? data.links?.length ?? 0);
-        setCheckDurationMs(data.checkDurationMs ?? 0);
-        setTotalDurationMs(data.totalDurationMs ?? 0);
-        const checkedCount = data.links?.length ?? 0;
-        const workingCount = (data.links ?? []).filter((item) => item.check?.ok).length;
-        setCheckingProgress(100);
-        setCheckingMessage(
-          `Checked ${checkedCount} links in ${formatSeconds(data.checkDurationMs ?? 0)} · Working ${workingCount} · Total ${formatSeconds(data.totalDurationMs ?? 0)}`,
-        );
-        window.setTimeout(() => {
-          setCheckingMessage("");
-          setCheckingProgress(0);
-          setCheckingStartedAt(null);
-        }, 1200);
-      }
+      setResults(startData.links ?? []);
+      setGeneratedCount(startData.generatedCount ?? startData.links?.length ?? 0);
+      setSkippedByFormatCount(startData.skippedByFormatCount ?? 0);
+      setUncheckedCount(startData.uncheckedCount ?? 0);
+      setCheckDurationMs(startData.checkDurationMs ?? 0);
+      setTotalDurationMs(startData.totalDurationMs ?? 0);
+      const checkedCount = startData.links?.length ?? 0;
+      const workingCount = (startData.links ?? []).filter((item) => item.check?.ok).length;
+      setCheckingProgress(100);
+      setCheckingMessage(
+        `Checked ${checkedCount} links in ${formatSeconds(startData.checkDurationMs ?? 0)} · Working ${workingCount} · Skipped ${startData.skippedByFormatCount ?? 0} · Not checked ${startData.uncheckedCount ?? 0}`,
+      );
+      window.setTimeout(() => {
+        setCheckingMessage("");
+        setCheckingProgress(0);
+        setCheckingStartedAt(null);
+      }, 1400);
     } catch {
       const wasCancelled = controller.signal.aborted;
       if (wasCancelled) {
@@ -354,6 +294,7 @@ export function PfnAssetsFinder() {
       setCheckingStartedAt(null);
       setErrorText("Network error while generating links.");
     } finally {
+      if (progressTimer !== null) window.clearInterval(progressTimer);
       generateAbortRef.current = null;
       setLoading(false);
     }
@@ -591,7 +532,7 @@ export function PfnAssetsFinder() {
             ) : null}
             {generatedCount > 0 ? (
               <p className="text-xs text-muted-foreground">
-                Generated: {generatedCount} · Checked: {visibleResults.length} working · Check time: {formatSeconds(checkDurationMs)} · Total: {formatSeconds(totalDurationMs)}
+                Generated: {generatedCount} · Checked: {visibleResults.length} working · Skipped: {skippedByFormatCount} · Not checked: {uncheckedCount} · Check time: {formatSeconds(checkDurationMs)} · Total: {formatSeconds(totalDurationMs)}
               </p>
             ) : null}
             <p className="text-xs text-muted-foreground">Current filter: {linkFormat === "tabOnly" ? "TAB format only" : "All formats"}</p>
