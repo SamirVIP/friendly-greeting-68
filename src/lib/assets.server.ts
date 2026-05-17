@@ -33,12 +33,52 @@ type TemplateRow = {
   is_active: boolean;
 };
 
+const LINK_META_CACHE_TTL_MS = 60_000;
+
+let linkMetaCache:
+  | {
+      expiresAt: number;
+      patterns: PatternRow[];
+      templates: TemplateRow[];
+    }
+  | null = null;
+
 function sanitizeWord(value: string) {
   return value.trim().replace(/\s+/g, "");
 }
 
 function hashCode(code: string) {
   return crypto.createHash("sha256").update(code).digest("hex");
+}
+
+async function getActiveLinkMeta() {
+  const now = Date.now();
+  if (linkMetaCache && linkMetaCache.expiresAt > now) {
+    return linkMetaCache;
+  }
+
+  const [patternsRes, templatesRes] = await Promise.all([
+    supabaseAdmin
+      .from("asset_link_patterns")
+      .select("id, region, event_type, label, pattern, sort_order, is_active")
+      .eq("is_active", true)
+      .order("sort_order", { ascending: true }),
+    supabaseAdmin
+      .from("sg_template_words")
+      .select("event_type, template_word, is_active")
+      .eq("is_active", true),
+  ]);
+
+  if (patternsRes.error) throw new Error(patternsRes.error.message);
+  if (templatesRes.error) throw new Error(templatesRes.error.message);
+
+  linkMetaCache = {
+    expiresAt: now + LINK_META_CACHE_TTL_MS,
+    patterns: (patternsRes.data as PatternRow[]) ?? [],
+    templates: (templatesRes.data as TemplateRow[]) ?? [],
+  };
+
+  return linkMetaCache;
 }
 
 export function createRandomAccessCode(length = 6) {
@@ -224,36 +264,24 @@ export async function generateLinks(input: GenerateLinksInput) {
     new Set(input.words.map(sanitizeWord).filter((value) => value.length > 0)),
   );
 
-  const { data: patterns, error: patternsError } = await supabaseAdmin
-    .from("asset_link_patterns")
-    .select("id, region, event_type, label, pattern, sort_order, is_active")
-    .in("region", input.regions)
-    .in("event_type", input.eventTypes)
-    .eq("is_active", true)
-    .order("sort_order", { ascending: true });
-
-  if (patternsError) throw new Error(patternsError.message);
+  const linkMeta = await getActiveLinkMeta();
+  const regionSet = new Set(input.regions);
+  const eventSet = new Set(input.eventTypes);
+  const patterns = linkMeta.patterns.filter(
+    (row) => regionSet.has(row.region as GenerateLinksInput["regions"][number]) && eventSet.has(row.event_type as GenerateLinksInput["eventTypes"][number]),
+  );
 
   const needsTemplateByEvent = new Set<string>();
-  (patterns as PatternRow[]).forEach((patternRow) => {
+  patterns.forEach((patternRow) => {
     if (patternRow.pattern.includes("(Template)") && patternRow.region === "SG") {
       needsTemplateByEvent.add(patternRow.event_type);
     }
   });
 
-  const eventTypesWithTemplate = Array.from(needsTemplateByEvent);
-  let templateRows: TemplateRow[] = [];
-
-  if (eventTypesWithTemplate.length > 0) {
-    const { data, error } = await supabaseAdmin
-      .from("sg_template_words")
-      .select("event_type, template_word, is_active")
-      .eq("is_active", true)
-      .in("event_type", eventTypesWithTemplate);
-
-    if (error) throw new Error(error.message);
-    templateRows = (data as TemplateRow[]) ?? [];
-  }
+  const templateRows =
+    needsTemplateByEvent.size > 0
+      ? linkMeta.templates.filter((row) => needsTemplateByEvent.has(row.event_type))
+      : [];
 
   const templatesByEvent = templateRows.reduce<Record<string, string[]>>((acc, row) => {
     if (!acc[row.event_type]) acc[row.event_type] = [];
@@ -274,7 +302,7 @@ export async function generateLinks(input: GenerateLinksInput) {
 
   const seen = new Set<string>();
 
-  (patterns as PatternRow[]).forEach((patternRow) => {
+  patterns.forEach((patternRow) => {
     const numbers: number[] = [];
     for (let num = input.numberRange.from; num <= input.numberRange.to; num += 1) numbers.push(num);
 
@@ -320,9 +348,9 @@ export async function checkLinks(
 ) {
   const sanitizedUrls = Array.from(new Set(urls.filter((url) => url.startsWith("https://"))));
 
-  const timeoutMs = 2800;
-  const workerLimit = 64;
-  const retryAttempts = 1;
+  const timeoutMs = 1600;
+  const workerLimit = Math.min(128, Math.max(24, Math.ceil(sanitizedUrls.length / 12)));
+  const retryAttempts = 0;
   const results: Array<{ url: string; ok: boolean; status: number | null }> = [];
   const total = sanitizedUrls.length;
   let processed = 0;
