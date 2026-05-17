@@ -213,9 +213,10 @@ export function PfnAssetsFinder() {
 
     const controller = new AbortController();
     generateAbortRef.current = controller;
+    let progressTimer: number | null = null;
 
     try {
-      const progressTimer = window.setInterval(() => {
+      progressTimer = window.setInterval(() => {
         const elapsedMs = Date.now() - startedAt;
         setCheckingMessage(
           linkCheckEnabled
@@ -253,7 +254,7 @@ export function PfnAssetsFinder() {
         totalDurationMs?: number;
       };
 
-      window.clearInterval(progressTimer);
+      if (progressTimer !== null) window.clearInterval(progressTimer);
 
       if (!startRes.ok || !startData.ok) {
         setCheckingProgress(0);
@@ -293,6 +294,7 @@ export function PfnAssetsFinder() {
       setCheckingStartedAt(null);
       setErrorText("Network error while generating links.");
     } finally {
+      if (progressTimer !== null) window.clearInterval(progressTimer);
       generateAbortRef.current = null;
       setLoading(false);
     }
