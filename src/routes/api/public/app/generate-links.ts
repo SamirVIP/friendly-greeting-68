@@ -37,12 +37,6 @@ type GenerateJob = {
 const JOB_TTL_MS = 10 * 60 * 1000;
 const jobs = new Map<string, GenerateJob>();
 
-function isTabStyleLink(input: { label: string; url: string }) {
-  const label = input.label.toLowerCase();
-  const url = input.url.toLowerCase();
-  return /\btab\b/.test(label) || /\btab\b/.test(url) || /\/tab(?:[\/_\-.\d]|$)/.test(url);
-}
-
 function cleanupJobs() {
   const now = Date.now();
   for (const [jobId, job] of jobs.entries()) {
@@ -53,12 +47,13 @@ function cleanupJobs() {
 }
 
 async function runGeneration(input: z.infer<typeof schema>, requestStart: number, onProgress?: (progress: { processed: number; total: number }) => void) {
-  const generated = await generateLinks(input.input);
-  const filteredLinks =
+  const generatedAll = await generateLinks(input.input);
+  const generated =
     input.linkFormat === "tabOnly"
-      ? generated.links.filter((item) => isTabStyleLink({ label: item.label, url: item.url }))
-      : generated.links;
-  const skippedByFormatCount = generated.links.length - filteredLinks.length;
+      ? await generateLinks(input.input, { linkFormat: "tabOnly" })
+      : generatedAll;
+  const filteredLinks = generated.links;
+  const skippedByFormatCount = generatedAll.links.length - filteredLinks.length;
 
   if (!input.checkLinks) {
     const noCheckLinks = filteredLinks.map((item) => ({
