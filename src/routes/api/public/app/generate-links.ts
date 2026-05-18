@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
+import crypto from "node:crypto";
 import { checkLinks, generateLinks, generateLinksInputSchema } from "@/lib/assets.server";
 import { inspectSessionFromRequest, logSessionDebug } from "@/lib/session.server";
 import { jsonResponse } from "@/lib/http.server";
