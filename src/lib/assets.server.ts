@@ -348,8 +348,8 @@ export async function checkLinks(
 ) {
   const sanitizedUrls = Array.from(new Set(urls.filter((url) => url.startsWith("https://"))));
 
-  const timeoutMs = 1600;
-  const workerLimit = Math.min(128, Math.max(24, Math.ceil(sanitizedUrls.length / 12)));
+  const timeoutMs = 1200;
+  const workerLimit = Math.min(220, Math.max(36, Math.ceil(sanitizedUrls.length / 8)));
   const retryAttempts = 0;
   const results: Array<{ url: string; ok: boolean; status: number | null }> = [];
   const total = sanitizedUrls.length;
@@ -357,13 +357,16 @@ export async function checkLinks(
 
   let cursor = 0;
 
-  async function fetchWithTimeout(url: string, method: "HEAD" | "GET") {
+  async function fetchWithTimeout(url: string) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       return await fetch(url, {
-        method,
+        method: "GET",
+        headers: {
+          Range: "bytes=0-0",
+        },
         cache: "no-store",
         signal: controller.signal,
       });
@@ -375,22 +378,13 @@ export async function checkLinks(
   async function checkOneUrl(url: string) {
     for (let attempt = 0; attempt <= retryAttempts; attempt += 1) {
       try {
-        const head = await fetchWithTimeout(url, "HEAD");
-
-        if (head.ok || head.status === 403 || head.status === 429) {
-          return { url, ok: true, status: head.status };
-        }
-
-        if (head.status === 405 || head.status === 501) {
-          const getRes = await fetchWithTimeout(url, "GET");
-          return {
-            url,
-            ok: getRes.ok || getRes.status === 403 || getRes.status === 429,
-            status: getRes.status,
-          };
-        }
-
-        return { url, ok: false, status: head.status };
+        const response = await fetchWithTimeout(url);
+        const isReachable =
+          response.ok ||
+          response.status === 206 ||
+          response.status === 403 ||
+          response.status === 429;
+        return { url, ok: isReachable, status: response.status };
       } catch {
         if (attempt === retryAttempts) {
           return { url, ok: false, status: null };
