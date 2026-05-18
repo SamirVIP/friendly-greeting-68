@@ -47,13 +47,9 @@ function cleanupJobs() {
 }
 
 async function runGeneration(input: z.infer<typeof schema>, requestStart: number, onProgress?: (progress: { processed: number; total: number }) => void) {
-  const generatedAll = await generateLinks(input.input);
-  const generated =
-    input.linkFormat === "tabOnly"
-      ? await generateLinks(input.input, { linkFormat: "tabOnly" })
-      : generatedAll;
+  const generated = await generateLinks(input.input, { linkFormat: input.linkFormat });
   const filteredLinks = generated.links;
-  const skippedByFormatCount = generatedAll.links.length - filteredLinks.length;
+  const skippedByFormatCount = 0;
 
   if (!input.checkLinks) {
     const noCheckLinks = filteredLinks.map((item) => ({
