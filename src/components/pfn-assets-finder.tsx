@@ -108,6 +108,27 @@ export function PfnAssetsFinder() {
     return `${(ms / 1000).toFixed(2)}s`;
   }
 
+  function waitForNextPoll(signal: AbortSignal, ms = 900) {
+    return new Promise<void>((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new DOMException("Aborted", "AbortError"));
+        return;
+      }
+
+      const timeout = window.setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+
+      const onAbort = () => {
+        window.clearTimeout(timeout);
+        reject(new DOMException("Aborted", "AbortError"));
+      };
+
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
   useEffect(() => {
     return () => {
       generateAbortRef.current?.abort();
@@ -213,25 +234,15 @@ export function PfnAssetsFinder() {
 
     const controller = new AbortController();
     generateAbortRef.current = controller;
-    let progressTimer: number | null = null;
 
     try {
-      progressTimer = window.setInterval(() => {
-        const elapsedMs = Date.now() - startedAt;
-        setCheckingMessage(
-          linkCheckEnabled
-            ? `Checking links... Elapsed ${formatSeconds(elapsedMs)} (Please wait)`
-            : `Generating links... Elapsed ${formatSeconds(elapsedMs)}`,
-        );
-      }, 1200);
-
       const startRes = await fetch("/api/public/app/generate-links", {
         method: "POST",
         credentials: "include",
         signal: controller.signal,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mode: "sync",
+          mode: "async",
           linkFormat,
           checkLinks: linkCheckEnabled,
           input: {
@@ -246,6 +257,13 @@ export function PfnAssetsFinder() {
       const startData = (await startRes.json()) as {
         ok: boolean;
         error?: string;
+        async?: boolean;
+        jobId?: string;
+        status?: "pending" | "processing" | "done" | "failed";
+        processed?: number;
+        total?: number;
+        elapsedMs?: number;
+        estimatedRemainingMs?: number;
         links?: LinkItem[];
         generatedCount?: number;
         skippedByFormatCount?: number;
@@ -254,14 +272,78 @@ export function PfnAssetsFinder() {
         totalDurationMs?: number;
       };
 
-      if (progressTimer !== null) window.clearInterval(progressTimer);
-
       if (!startRes.ok || !startData.ok) {
         setCheckingProgress(0);
         setCheckingMessage("");
         setCheckingStartedAt(null);
         setErrorText(startData.error ?? "Generation failed");
         return;
+      }
+
+      if (startData.async && startData.jobId) {
+        setCheckingProgress(10);
+
+        while (true) {
+          await waitForNextPoll(controller.signal);
+
+          const statusRes = await fetch(`/api/public/app/generate-links?jobId=${encodeURIComponent(startData.jobId)}`, {
+            credentials: "include",
+            signal: controller.signal,
+          });
+
+          const statusData = (await statusRes.json()) as {
+            ok: boolean;
+            error?: string;
+            status?: "pending" | "processing" | "done" | "failed";
+            processed?: number;
+            total?: number;
+            elapsedMs?: number;
+            estimatedRemainingMs?: number;
+            links?: LinkItem[];
+            generatedCount?: number;
+            skippedByFormatCount?: number;
+            uncheckedCount?: number;
+            checkDurationMs?: number;
+            totalDurationMs?: number;
+          };
+
+          const total = statusData.total ?? 0;
+          const processed = statusData.processed ?? 0;
+          const progress = total > 0 ? Math.min(96, Math.round((processed / total) * 100)) : 12;
+          setCheckingProgress(progress);
+          setCheckingMessage(
+            `Checked ${processed}/${total || "..."} · Elapsed ${formatSeconds(statusData.elapsedMs ?? Date.now() - startedAt)} · ETA ${formatSeconds(statusData.estimatedRemainingMs ?? 0)}`,
+          );
+
+          if (statusData.status === "failed" || !statusRes.ok) {
+            setCheckingProgress(0);
+            setCheckingMessage("");
+            setCheckingStartedAt(null);
+            setErrorText(statusData.error ?? "Generation failed");
+            return;
+          }
+
+          if (statusData.status === "done" && statusData.ok) {
+            setResults(statusData.links ?? []);
+            setGeneratedCount(statusData.generatedCount ?? statusData.links?.length ?? 0);
+            setSkippedByFormatCount(statusData.skippedByFormatCount ?? 0);
+            setUncheckedCount(statusData.uncheckedCount ?? 0);
+            setCheckDurationMs(statusData.checkDurationMs ?? 0);
+            setTotalDurationMs(statusData.totalDurationMs ?? 0);
+            const checkedCount = statusData.links?.length ?? 0;
+            const workingCount = (statusData.links ?? []).filter((item) => item.check?.ok).length;
+            setCheckingProgress(100);
+            setCheckingMessage(
+              `Checked ${checkedCount} links in ${formatSeconds(statusData.checkDurationMs ?? 0)} · Working ${workingCount} · Skipped ${statusData.skippedByFormatCount ?? 0} · Not checked ${statusData.uncheckedCount ?? 0}`,
+            );
+            window.setTimeout(() => {
+              setCheckingMessage("");
+              setCheckingProgress(0);
+              setCheckingStartedAt(null);
+            }, 1200);
+            return;
+          }
+        }
       }
 
       setResults(startData.links ?? []);
@@ -294,7 +376,6 @@ export function PfnAssetsFinder() {
       setCheckingStartedAt(null);
       setErrorText("Network error while generating links.");
     } finally {
-      if (progressTimer !== null) window.clearInterval(progressTimer);
       generateAbortRef.current = null;
       setLoading(false);
     }

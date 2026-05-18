@@ -1,5 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "bun run build",
-  "outputDirectory": "dist/client"
+  "framework": "tanstack-start",
+  "installCommand": "bun install",
+  "buildCommand": "bun run build"
 }

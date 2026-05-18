@@ -17,6 +17,14 @@ export const generateLinksInputSchema = z.object({
 
 export type GenerateLinksInput = z.infer<typeof generateLinksInputSchema>;
 
+export type GenerateLinkFormat = "all" | "tabOnly";
+
+function isTabPattern(input: { label: string; pattern: string }) {
+  const label = input.label.toLowerCase();
+  const pattern = input.pattern.toLowerCase();
+  return /\btab\b/.test(label) || /\btab\b/.test(pattern) || /\/tab(?:[\/_\-.\d]|$)/.test(pattern);
+}
+
 type PatternRow = {
   id: string;
   region: string;
@@ -259,7 +267,7 @@ export async function generateAccessCode(input: {
   };
 }
 
-export async function generateLinks(input: GenerateLinksInput) {
+export async function generateLinks(input: GenerateLinksInput, options?: { linkFormat?: GenerateLinkFormat }) {
   const normalizedWords = Array.from(
     new Set(input.words.map(sanitizeWord).filter((value) => value.length > 0)),
   );
@@ -268,11 +276,18 @@ export async function generateLinks(input: GenerateLinksInput) {
   const regionSet = new Set(input.regions);
   const eventSet = new Set(input.eventTypes);
   const patterns = linkMeta.patterns.filter(
-    (row) => regionSet.has(row.region as GenerateLinksInput["regions"][number]) && eventSet.has(row.event_type as GenerateLinksInput["eventTypes"][number]),
+    (row) =>
+      regionSet.has(row.region as GenerateLinksInput["regions"][number]) &&
+      eventSet.has(row.event_type as GenerateLinksInput["eventTypes"][number]),
   );
 
+  const filteredPatterns =
+    options?.linkFormat === "tabOnly"
+      ? patterns.filter((row) => isTabPattern({ label: row.label, pattern: row.pattern }))
+      : patterns;
+
   const needsTemplateByEvent = new Set<string>();
-  patterns.forEach((patternRow) => {
+  filteredPatterns.forEach((patternRow) => {
     if (patternRow.pattern.includes("(Template)") && patternRow.region === "SG") {
       needsTemplateByEvent.add(patternRow.event_type);
     }
@@ -348,8 +363,8 @@ export async function checkLinks(
 ) {
   const sanitizedUrls = Array.from(new Set(urls.filter((url) => url.startsWith("https://"))));
 
-  const timeoutMs = 1600;
-  const workerLimit = Math.min(128, Math.max(24, Math.ceil(sanitizedUrls.length / 12)));
+  const timeoutMs = 1200;
+  const workerLimit = Math.min(220, Math.max(36, Math.ceil(sanitizedUrls.length / 8)));
   const retryAttempts = 0;
   const results: Array<{ url: string; ok: boolean; status: number | null }> = [];
   const total = sanitizedUrls.length;
@@ -357,13 +372,16 @@ export async function checkLinks(
 
   let cursor = 0;
 
-  async function fetchWithTimeout(url: string, method: "HEAD" | "GET") {
+  async function fetchWithTimeout(url: string) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     try {
       return await fetch(url, {
-        method,
+        method: "GET",
+        headers: {
+          Range: "bytes=0-0",
+        },
         cache: "no-store",
         signal: controller.signal,
       });
@@ -375,22 +393,13 @@ export async function checkLinks(
   async function checkOneUrl(url: string) {
     for (let attempt = 0; attempt <= retryAttempts; attempt += 1) {
       try {
-        const head = await fetchWithTimeout(url, "HEAD");
-
-        if (head.ok || head.status === 403 || head.status === 429) {
-          return { url, ok: true, status: head.status };
-        }
-
-        if (head.status === 405 || head.status === 501) {
-          const getRes = await fetchWithTimeout(url, "GET");
-          return {
-            url,
-            ok: getRes.ok || getRes.status === 403 || getRes.status === 429,
-            status: getRes.status,
-          };
-        }
-
-        return { url, ok: false, status: head.status };
+        const response = await fetchWithTimeout(url);
+        const isReachable =
+          response.ok ||
+          response.status === 206 ||
+          response.status === 403 ||
+          response.status === 429;
+        return { url, ok: isReachable, status: response.status };
       } catch {
         if (attempt === retryAttempts) {
           return { url, ok: false, status: null };
