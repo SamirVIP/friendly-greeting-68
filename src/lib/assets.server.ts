@@ -17,6 +17,8 @@ export const generateLinksInputSchema = z.object({
 
 export type GenerateLinksInput = z.infer<typeof generateLinksInputSchema>;
 
+export type GenerateLinkFormat = "all" | "tabOnly";
+
 type PatternRow = {
   id: string;
   region: string;
@@ -268,7 +270,9 @@ export async function generateLinks(input: GenerateLinksInput) {
   const regionSet = new Set(input.regions);
   const eventSet = new Set(input.eventTypes);
   const patterns = linkMeta.patterns.filter(
-    (row) => regionSet.has(row.region as GenerateLinksInput["regions"][number]) && eventSet.has(row.event_type as GenerateLinksInput["eventTypes"][number]),
+    (row) =>
+      regionSet.has(row.region as GenerateLinksInput["regions"][number]) &&
+      eventSet.has(row.event_type as GenerateLinksInput["eventTypes"][number]),
   );
 
   const needsTemplateByEvent = new Set<string>();
