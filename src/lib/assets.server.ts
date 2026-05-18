@@ -19,6 +19,12 @@ export type GenerateLinksInput = z.infer<typeof generateLinksInputSchema>;
 
 export type GenerateLinkFormat = "all" | "tabOnly";
 
+function isTabPattern(input: { label: string; pattern: string }) {
+  const label = input.label.toLowerCase();
+  const pattern = input.pattern.toLowerCase();
+  return /\btab\b/.test(label) || /\btab\b/.test(pattern) || /\/tab(?:[\/_\-.\d]|$)/.test(pattern);
+}
+
 type PatternRow = {
   id: string;
   region: string;
@@ -261,7 +267,7 @@ export async function generateAccessCode(input: {
   };
 }
 
-export async function generateLinks(input: GenerateLinksInput) {
+export async function generateLinks(input: GenerateLinksInput, options?: { linkFormat?: GenerateLinkFormat }) {
   const normalizedWords = Array.from(
     new Set(input.words.map(sanitizeWord).filter((value) => value.length > 0)),
   );
@@ -275,8 +281,13 @@ export async function generateLinks(input: GenerateLinksInput) {
       eventSet.has(row.event_type as GenerateLinksInput["eventTypes"][number]),
   );
 
+  const filteredPatterns =
+    options?.linkFormat === "tabOnly"
+      ? patterns.filter((row) => isTabPattern({ label: row.label, pattern: row.pattern }))
+      : patterns;
+
   const needsTemplateByEvent = new Set<string>();
-  patterns.forEach((patternRow) => {
+  filteredPatterns.forEach((patternRow) => {
     if (patternRow.pattern.includes("(Template)") && patternRow.region === "SG") {
       needsTemplateByEvent.add(patternRow.event_type);
     }
