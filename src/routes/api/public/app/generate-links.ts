@@ -51,6 +51,8 @@ async function runGeneration(input: z.infer<typeof schema>, requestStart: number
   const filteredLinks = generated.links;
   const skippedByFormatCount = 0;
 
+  onProgress?.({ processed: 0, total: filteredLinks.length });
+
   if (!input.checkLinks) {
     const noCheckLinks = filteredLinks.map((item) => ({
       ...item,
