@@ -286,75 +286,91 @@ export async function generateLinks(input: GenerateLinksInput, options?: { linkF
       ? patterns.filter((row) => isTabPattern({ label: row.label, pattern: row.pattern }))
       : patterns;
 
-  const needsTemplateByEvent = new Set<string>();
-  filteredPatterns.forEach((patternRow) => {
-    if (patternRow.pattern.includes("(Template)") && patternRow.region === "SG") {
-      needsTemplateByEvent.add(patternRow.event_type);
-    }
-  });
+  const numbers: number[] = [];
+  for (let num = input.numberRange.from; num <= input.numberRange.to; num += 1) numbers.push(num);
 
-  const templateRows =
-    needsTemplateByEvent.size > 0
-      ? linkMeta.templates.filter((row) => needsTemplateByEvent.has(row.event_type))
-      : [];
+  const buildLinks = (patternRows: PatternRow[]) => {
+    const needsTemplateByEvent = new Set<string>();
+    patternRows.forEach((patternRow) => {
+      if (patternRow.pattern.includes("(Template)") && patternRow.region === "SG") {
+        needsTemplateByEvent.add(patternRow.event_type);
+      }
+    });
 
-  const templatesByEvent = templateRows.reduce<Record<string, string[]>>((acc, row) => {
-    if (!acc[row.event_type]) acc[row.event_type] = [];
-    acc[row.event_type].push(row.template_word);
-    return acc;
-  }, {});
+    const templateRows =
+      needsTemplateByEvent.size > 0
+        ? linkMeta.templates.filter((row) => needsTemplateByEvent.has(row.event_type))
+        : [];
 
-  const links: Array<{
-    id: string;
-    region: string;
-    eventType: string;
-    label: string;
-    word: string;
-    number: number;
-    templateWord: string | null;
-    url: string;
-  }> = [];
+    const templatesByEvent = templateRows.reduce<Record<string, string[]>>((acc, row) => {
+      if (!acc[row.event_type]) acc[row.event_type] = [];
+      acc[row.event_type].push(row.template_word);
+      return acc;
+    }, {});
 
-  const seen = new Set<string>();
+    const links: Array<{
+      id: string;
+      region: string;
+      eventType: string;
+      label: string;
+      word: string;
+      number: number;
+      templateWord: string | null;
+      url: string;
+    }> = [];
 
-  filteredPatterns.forEach((patternRow) => {
-    const numbers: number[] = [];
-    for (let num = input.numberRange.from; num <= input.numberRange.to; num += 1) numbers.push(num);
+    const seen = new Set<string>();
 
-    const templateWords =
-      patternRow.region === "SG" && patternRow.pattern.includes("(Template)")
-        ? templatesByEvent[patternRow.event_type] && templatesByEvent[patternRow.event_type].length > 0
-          ? templatesByEvent[patternRow.event_type]
-          : ["Template"]
-        : [""];
+    patternRows.forEach((patternRow) => {
+      const templateWords =
+        patternRow.region === "SG" && patternRow.pattern.includes("(Template)")
+          ? templatesByEvent[patternRow.event_type] && templatesByEvent[patternRow.event_type].length > 0
+            ? templatesByEvent[patternRow.event_type]
+            : ["Template"]
+          : [""];
 
-    normalizedWords.forEach((word) => {
-      templateWords.forEach((templateWord) => {
-        numbers.forEach((number) => {
-          const url = patternRow.pattern
-            .replaceAll("(Template)", templateWord)
-            .replaceAll("(Number)", String(number))
-            .replaceAll("(Word)", word);
+      normalizedWords.forEach((word) => {
+        templateWords.forEach((templateWord) => {
+          numbers.forEach((number) => {
+            const url = patternRow.pattern
+              .replaceAll("(Template)", templateWord)
+              .replaceAll("(Number)", String(number))
+              .replaceAll("(Word)", word);
 
-          if (seen.has(url)) return;
-          seen.add(url);
+            if (seen.has(url)) return;
+            seen.add(url);
 
-          links.push({
-            id: `${patternRow.id}-${word}-${number}-${templateWord}`,
-            region: patternRow.region,
-            eventType: patternRow.event_type,
-            label: patternRow.label,
-            word,
-            number,
-            templateWord: templateWord || null,
-            url,
+            links.push({
+              id: `${patternRow.id}-${word}-${number}-${templateWord}`,
+              region: patternRow.region,
+              eventType: patternRow.event_type,
+              label: patternRow.label,
+              word,
+              number,
+              templateWord: templateWord || null,
+              url,
+            });
           });
         });
       });
     });
-  });
 
-  return { links };
+    return links;
+  };
+
+  if (options?.linkFormat === "tabOnly") {
+    const allLinks = buildLinks(patterns);
+    const tabOnlyLinks = buildLinks(filteredPatterns);
+    return {
+      links: tabOnlyLinks,
+      skippedByFormatCount: Math.max(0, allLinks.length - tabOnlyLinks.length),
+    };
+  }
+
+  return {
+    links: buildLinks(patterns),
+    skippedByFormatCount: 0,
+  };
 }
 
 export async function checkLinks(
