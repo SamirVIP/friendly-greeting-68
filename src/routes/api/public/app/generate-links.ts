@@ -49,7 +49,7 @@ function cleanupJobs() {
 async function runGeneration(input: z.infer<typeof schema>, requestStart: number, onProgress?: (progress: { processed: number; total: number }) => void) {
   const generated = await generateLinks(input.input, { linkFormat: input.linkFormat });
   const filteredLinks = generated.links;
-  const skippedByFormatCount = 0;
+  const skippedByFormatCount = generated.skippedByFormatCount ?? 0;
 
   onProgress?.({ processed: 0, total: filteredLinks.length });
 
