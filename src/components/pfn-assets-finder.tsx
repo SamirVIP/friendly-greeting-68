@@ -332,10 +332,15 @@ export function PfnAssetsFinder() {
       };
 
       if (!startRes.ok || !startData.ok) {
+        if (startRes.status === 401) {
+          setLoggedIn(false);
+          setErrorText("Session expired. Login again.");
+        } else {
+          setErrorText(startData.error ?? "Generation failed");
+        }
         setCheckingProgress(0);
         setCheckingMessage("");
         setCheckingStartedAt(null);
-        setErrorText(startData.error ?? "Generation failed");
         return;
       }
 
