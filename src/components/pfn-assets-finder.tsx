@@ -234,6 +234,75 @@ export function PfnAssetsFinder() {
 
     const controller = new AbortController();
     generateAbortRef.current = controller;
+    const requestPayload = {
+      linkFormat,
+      checkLinks: linkCheckEnabled,
+      input: {
+        words,
+        regions: selectedRegions,
+        eventTypes: selectedTypes,
+        numberRange: { from: numberFrom, to: numberTo },
+      },
+    };
+
+    const applyResult = (data: {
+      links?: LinkItem[];
+      generatedCount?: number;
+      skippedByFormatCount?: number;
+      uncheckedCount?: number;
+      checkDurationMs?: number;
+      totalDurationMs?: number;
+    }) => {
+      const links = data.links ?? [];
+      setResults(links);
+      setGeneratedCount(data.generatedCount ?? links.length);
+      setSkippedByFormatCount(data.skippedByFormatCount ?? 0);
+      setUncheckedCount(data.uncheckedCount ?? 0);
+      setCheckDurationMs(data.checkDurationMs ?? 0);
+      setTotalDurationMs(data.totalDurationMs ?? 0);
+      const checkedCount = links.length;
+      const workingCount = links.filter((item) => item.check?.ok).length;
+      setCheckingProgress(100);
+      setCheckingMessage(
+        `Checked ${checkedCount} links in ${formatSeconds(data.checkDurationMs ?? 0)} · Working ${workingCount} · Skipped ${data.skippedByFormatCount ?? 0} · Not checked ${data.uncheckedCount ?? 0}`,
+      );
+      window.setTimeout(() => {
+        setCheckingMessage("");
+        setCheckingProgress(0);
+        setCheckingStartedAt(null);
+      }, 1200);
+    };
+
+    const fallbackSyncRun = async () => {
+      const syncRes = await fetch("/api/public/app/generate-links", {
+        method: "POST",
+        credentials: "include",
+        signal: controller.signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...requestPayload, mode: "sync" }),
+      });
+
+      const syncData = (await syncRes.json()) as {
+        ok: boolean;
+        error?: string;
+        links?: LinkItem[];
+        generatedCount?: number;
+        skippedByFormatCount?: number;
+        uncheckedCount?: number;
+        checkDurationMs?: number;
+        totalDurationMs?: number;
+      };
+
+      if (!syncRes.ok || !syncData.ok) {
+        setCheckingProgress(0);
+        setCheckingMessage("");
+        setCheckingStartedAt(null);
+        setErrorText(syncData.error ?? "Generation failed");
+        return;
+      }
+
+      applyResult(syncData);
+    };
 
     try {
       const startRes = await fetch("/api/public/app/generate-links", {
@@ -241,17 +310,7 @@ export function PfnAssetsFinder() {
         credentials: "include",
         signal: controller.signal,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "async",
-          linkFormat,
-          checkLinks: linkCheckEnabled,
-          input: {
-            words,
-            regions: selectedRegions,
-            eventTypes: selectedTypes,
-            numberRange: { from: numberFrom, to: numberTo },
-          },
-        }),
+        body: JSON.stringify({ ...requestPayload, mode: "async" }),
       });
 
       const startData = (await startRes.json()) as {
@@ -309,11 +368,29 @@ export function PfnAssetsFinder() {
 
           const total = statusData.total ?? 0;
           const processed = statusData.processed ?? 0;
-          const progress = total > 0 ? Math.min(96, Math.round((processed / total) * 100)) : 12;
+          const progress = total > 0 ? Math.max(10, Math.min(96, Math.round((processed / total) * 100))) : 12;
           setCheckingProgress(progress);
-          setCheckingMessage(
-            `Checked ${processed}/${total || "..."} · Elapsed ${formatSeconds(statusData.elapsedMs ?? Date.now() - startedAt)} · ETA ${formatSeconds(statusData.estimatedRemainingMs ?? 0)}`,
-          );
+          const statusLabel =
+            statusData.status === "pending" && total === 0
+              ? "Preparing links..."
+              : `Checked ${processed}/${total || "..."} · Elapsed ${formatSeconds(statusData.elapsedMs ?? Date.now() - startedAt)} · ETA ${formatSeconds(statusData.estimatedRemainingMs ?? 0)}`;
+          setCheckingMessage(statusLabel);
+
+          if (statusRes.status === 401) {
+            setLoggedIn(false);
+            setCheckingProgress(0);
+            setCheckingMessage("");
+            setCheckingStartedAt(null);
+            setErrorText("Session expired. Login again.");
+            return;
+          }
+
+          if (statusRes.status === 404 && statusData.error?.toLowerCase().includes("run not found")) {
+            setCheckingMessage("Live mode not available here, switching to stable run...");
+            setCheckingProgress(15);
+            await fallbackSyncRun();
+            return;
+          }
 
           if (statusData.status === "failed" || !statusRes.ok) {
             setCheckingProgress(0);
@@ -324,45 +401,13 @@ export function PfnAssetsFinder() {
           }
 
           if (statusData.status === "done" && statusData.ok) {
-            setResults(statusData.links ?? []);
-            setGeneratedCount(statusData.generatedCount ?? statusData.links?.length ?? 0);
-            setSkippedByFormatCount(statusData.skippedByFormatCount ?? 0);
-            setUncheckedCount(statusData.uncheckedCount ?? 0);
-            setCheckDurationMs(statusData.checkDurationMs ?? 0);
-            setTotalDurationMs(statusData.totalDurationMs ?? 0);
-            const checkedCount = statusData.links?.length ?? 0;
-            const workingCount = (statusData.links ?? []).filter((item) => item.check?.ok).length;
-            setCheckingProgress(100);
-            setCheckingMessage(
-              `Checked ${checkedCount} links in ${formatSeconds(statusData.checkDurationMs ?? 0)} · Working ${workingCount} · Skipped ${statusData.skippedByFormatCount ?? 0} · Not checked ${statusData.uncheckedCount ?? 0}`,
-            );
-            window.setTimeout(() => {
-              setCheckingMessage("");
-              setCheckingProgress(0);
-              setCheckingStartedAt(null);
-            }, 1200);
+            applyResult(statusData);
             return;
           }
         }
       }
 
-      setResults(startData.links ?? []);
-      setGeneratedCount(startData.generatedCount ?? startData.links?.length ?? 0);
-      setSkippedByFormatCount(startData.skippedByFormatCount ?? 0);
-      setUncheckedCount(startData.uncheckedCount ?? 0);
-      setCheckDurationMs(startData.checkDurationMs ?? 0);
-      setTotalDurationMs(startData.totalDurationMs ?? 0);
-      const checkedCount = startData.links?.length ?? 0;
-      const workingCount = (startData.links ?? []).filter((item) => item.check?.ok).length;
-      setCheckingProgress(100);
-      setCheckingMessage(
-        `Checked ${checkedCount} links in ${formatSeconds(startData.checkDurationMs ?? 0)} · Working ${workingCount} · Skipped ${startData.skippedByFormatCount ?? 0} · Not checked ${startData.uncheckedCount ?? 0}`,
-      );
-      window.setTimeout(() => {
-        setCheckingMessage("");
-        setCheckingProgress(0);
-        setCheckingStartedAt(null);
-      }, 1400);
+      applyResult(startData);
     } catch {
       const wasCancelled = controller.signal.aborted;
       if (wasCancelled) {
