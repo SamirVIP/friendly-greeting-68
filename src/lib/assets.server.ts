@@ -317,7 +317,7 @@ export async function generateLinks(input: GenerateLinksInput, options?: { linkF
 
   const seen = new Set<string>();
 
-  patterns.forEach((patternRow) => {
+  filteredPatterns.forEach((patternRow) => {
     const numbers: number[] = [];
     for (let num = input.numberRange.from; num <= input.numberRange.to; num += 1) numbers.push(num);
 
@@ -362,6 +362,11 @@ export async function checkLinks(
   options?: { onProgress?: (progress: { processed: number; total: number }) => void },
 ) {
   const sanitizedUrls = Array.from(new Set(urls.filter((url) => url.startsWith("https://"))));
+
+  if (sanitizedUrls.length === 0) {
+    options?.onProgress?.({ processed: 0, total: 0 });
+    return [];
+  }
 
   const timeoutMs = 1200;
   const workerLimit = Math.min(220, Math.max(36, Math.ceil(sanitizedUrls.length / 8)));
